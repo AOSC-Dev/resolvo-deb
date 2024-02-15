@@ -1,4 +1,8 @@
-use oma_apt::{cache::PackageSort, new_cache, package::DepType};
+use oma_apt::{
+    cache::PackageSort,
+    new_cache,
+    package::{DepType, Package},
+};
 use resolvo::{
     Candidates, Dependencies, DependencyProvider, NameId, Pool, SolvableId, SolverCache, VersionSet,
 };
@@ -12,6 +16,7 @@ pub struct DebPackageVersion {
     pub name: String,
     pub version: PkgVersion,
     pub requires: Vec<Requirement>,
+    pub limits: Vec<Requirement>,
     // pub suggests: Vec<Requirement>,
     // provides: Vec<Requirement>,
 }
@@ -141,40 +146,13 @@ impl DebProvider {
         let mut solve_packages = HashMap::new();
 
         for pkg in packages {
-            let mut requires = vec![];
-            if let Some(cand) = pkg.candidate() {
-                let deps = cand.depends_map();
-                let deps = deps
-                    .get(&DepType::Depends)
-                    .map(|x| OmaDependency::map_deps(x).inner());
-
-                if let Some(deps) = deps {
-                    for dep in deps {
-                        for b in dep {
-                            requires.push(Requirement {
-                                name: b.name,
-                                flags: match b.comp_symbol.as_deref() {
-                                    Some(">=") => Some("GE".to_string()),
-                                    Some(">") => Some("GT".to_string()),
-                                    Some("<=") => Some("LE".to_string()),
-                                    Some("<") => Some("LT".to_string()),
-                                    Some("=") => Some("EQ".to_string()),
-                                    Some(">>") => Some("GT".to_string()),
-                                    Some("<<") => Some("LT".to_string()),
-                                    _ => None,
-                                },
-                                version: b.ver.map(|x| PkgVersion::try_from(x.as_str()).unwrap()),
-                                preinstall: false,
-                            })
-                        }
-                    }
-                }
-            }
+            let (requires, limits) = get_requirment(&pkg);
 
             let pack = DebPackageVersion {
                 name: pkg.name().to_string(),
                 version: PkgVersion::try_from(pkg.candidate().unwrap().version()).unwrap(),
                 requires,
+                limits
             };
 
             let name_id = pool.intern_package_name(pkg.name());
@@ -255,16 +233,20 @@ impl DependencyProvider<Requirement> for DebProvider {
         let pack = candidate.inner();
 
         let requirements = &pack.requires;
+        let limits = &pack.limits;
 
         let mut result = Dependencies::default();
 
         for req in requirements {
-            if req.name.starts_with('/') || req.name.contains(" if ") {
-                continue;
-            };
             let dep_name = self.pool.intern_package_name(&req.name);
             let dep_spec = self.pool.intern_version_set(dep_name, req.clone());
             result.requirements.push(dep_spec);
+        }
+
+        for limit in limits {
+            let dep_name = self.pool.intern_package_name(&limit.name);
+            let dep_spec = self.pool.intern_version_set(dep_name, limit.clone());
+            result.constrains.push(dep_spec);
         }
         // if !self.disable_suggest {
         //     for req in &pack.suggests {
@@ -279,4 +261,95 @@ impl DependencyProvider<Requirement> for DebProvider {
 
         result
     }
+}
+
+fn get_requirment(pkg: &Package) -> (Vec<Requirement>, Vec<Requirement>) {
+    let mut requires = vec![];
+    let mut limit = vec![];
+    if let Some(cand) = pkg.candidate() {
+        let deps_map = cand.depends_map();
+        let deps = deps_map
+            .get(&DepType::Depends)
+            .map(|x| OmaDependency::map_deps(x).inner());
+
+        let deps_pre = deps_map
+            .get(&DepType::PreDepends)
+            .map(|x| OmaDependency::map_deps(x).inner());
+
+        let mut all_deps = vec![];
+
+        if let Some(deps) = deps {
+            all_deps.extend(deps);
+        }
+
+        if let Some(deps) = deps_pre {
+            all_deps.extend(deps);
+        }
+
+        for dep in all_deps {
+            for b in dep {
+                requires.push(Requirement {
+                    name: b.name,
+                    flags: match b.comp_symbol.as_deref() {
+                        Some(">=") => Some("GE".to_string()),
+                        Some(">") => Some("GT".to_string()),
+                        Some("<=") => Some("LE".to_string()),
+                        Some("<") => Some("LT".to_string()),
+                        Some("=") => Some("EQ".to_string()),
+                        Some(">>") => Some("GT".to_string()),
+                        Some("<<") => Some("LT".to_string()),
+                        _ => None,
+                    },
+                    version: b.ver.map(|x| PkgVersion::try_from(x.as_str()).unwrap()),
+                    preinstall: false,
+                })
+            }
+        }
+
+        let breaks = deps_map
+            .get(&DepType::Breaks)
+            .map(|x| OmaDependency::map_deps(x).inner());
+        let replaces = deps_map
+            .get(&DepType::Replaces)
+            .map(|x| OmaDependency::map_deps(x).inner());
+        let conflicts = deps_map
+            .get(&DepType::Conflicts)
+            .map(|x| OmaDependency::map_deps(x).inner());
+
+        let mut all_rev_ship_deps = vec![];
+
+        if let Some(replaces) = replaces {
+            all_rev_ship_deps.extend(replaces);
+        }
+
+        if let Some(breaks) = breaks {
+            all_rev_ship_deps.extend(breaks);
+        }
+
+        if let Some(conflicts) = conflicts {
+            all_rev_ship_deps.extend(conflicts);
+        }
+
+        for dep in all_rev_ship_deps {
+            for b in dep {
+                limit.push(Requirement {
+                    name: b.name,
+                    flags: match b.comp_symbol.as_deref() {
+                        Some(">=") => Some("LT".to_string()),
+                        Some(">") => Some("LE".to_string()),
+                        Some("<=") => Some("GT".to_string()),
+                        Some("<") => Some("GE".to_string()),
+                        Some("=") => Some("NE".to_string()),
+                        Some(">>") => Some("LE".to_string()),
+                        Some("<<") => Some("GE".to_string()),
+                        _ => None,
+                    },
+                    version: b.ver.map(|x| PkgVersion::try_from(x.as_str()).unwrap()),
+                    preinstall: true,
+                })
+            }
+        }
+    }
+
+    (requires, limit)
 }
