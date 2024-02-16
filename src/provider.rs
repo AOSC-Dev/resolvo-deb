@@ -1,140 +1,13 @@
-use oma_apt::{
-    cache::PackageSort,
-    new_cache,
-    package::{BaseDep, DepType, Dependency, Package},
-};
+use oma_debcontrol::Paragraph;
 use resolvo::{
     Candidates, Dependencies, DependencyProvider, NameId, Pool, SolvableId, SolverCache, VersionSet,
 };
+use thiserror::Error;
 use tracing::info;
 use version_compare::Cmp;
 
 use crate::pkgversion::PkgVersion;
 use std::{collections::HashMap, fmt::Display, hash::Hash};
-
-#[derive(Debug, Clone)]
-pub struct OmaDependency {
-    pub name: String,
-    pub comp_symbol: Option<String>,
-    pub ver: Option<String>,
-    pub target_ver: Option<String>,
-    pub comp_ver: Option<String>,
-}
-
-impl From<&BaseDep<'_>> for OmaDependency {
-    fn from(dep: &BaseDep) -> Self {
-        Self {
-            name: dep.name().to_owned(),
-            comp_symbol: dep.comp().map(|x| x.to_string()),
-            ver: dep.version().map(|x| x.to_string()),
-            target_ver: dep.target_ver().ok().map(|x| x.to_string()),
-            comp_ver: dep
-                .comp()
-                .and_then(|x| Some(format!("{x} {}", dep.version()?))),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct OmaDependencyGroup(Vec<Vec<OmaDependency>>);
-
-impl OmaDependencyGroup {
-    pub fn inner(self) -> Vec<Vec<OmaDependency>> {
-        self.0
-    }
-}
-
-impl Display for OmaDependencyGroup {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for (i, d) in self.0.iter().enumerate() {
-            if d.len() == 1 {
-                // 如果数组长度为一，则肯定第一个位置有值
-                // 因此直接 unwrap
-                let dep = d.first().unwrap();
-                f.write_str(&dep.name)?;
-                if let Some(comp) = &dep.comp_ver {
-                    f.write_str(&format!(" ({comp})"))?;
-                }
-                if i != self.0.len() - 1 {
-                    f.write_str(", ")?;
-                }
-            } else {
-                let total = d.len() - 1;
-                for (num, base_dep) in d.iter().enumerate() {
-                    f.write_str(&base_dep.name)?;
-                    if let Some(comp) = &base_dep.comp_ver {
-                        f.write_str(&format!(" ({comp})"))?;
-                    }
-                    if i != self.0.len() - 1 {
-                        if num != total {
-                            f.write_str(" | ")?;
-                        } else {
-                            f.write_str(", ")?;
-                        }
-                    }
-                }
-            }
-        }
-
-        Ok(())
-    }
-}
-
-impl OmaDependency {
-    pub fn map_deps(deps: &[Dependency]) -> OmaDependencyGroup {
-        let mut res = vec![];
-
-        for dep in deps {
-            if dep.is_or() {
-                let mut v = vec![];
-                for base_dep in &dep.base_deps {
-                    v.push(Self::from(base_dep));
-                }
-                res.push(v);
-            } else {
-                let lone_dep = dep.first();
-                res.push(vec![Self::from(lone_dep)]);
-            }
-        }
-
-        OmaDependencyGroup(res)
-    }
-}
-
-#[derive(Debug, Eq, PartialEq, Hash)]
-pub enum OmaDepType {
-    Depends,
-    PreDepends,
-    Suggests,
-    Recommends,
-    Conflicts,
-    Replaces,
-    Obsoletes,
-    Breaks,
-    Enhances,
-}
-
-impl Display for OmaDepType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self)
-    }
-}
-
-impl From<&DepType> for OmaDepType {
-    fn from(v: &oma_apt::package::DepType) -> Self {
-        match v {
-            oma_apt::package::DepType::Depends => OmaDepType::Depends,
-            oma_apt::package::DepType::PreDepends => OmaDepType::PreDepends,
-            oma_apt::package::DepType::Suggests => OmaDepType::Suggests,
-            oma_apt::package::DepType::Recommends => OmaDepType::Recommends,
-            oma_apt::package::DepType::Conflicts => OmaDepType::Conflicts,
-            oma_apt::package::DepType::Replaces => OmaDepType::Replaces,
-            oma_apt::package::DepType::Obsoletes => OmaDepType::Obsoletes,
-            oma_apt::package::DepType::Breaks => OmaDepType::Breaks,
-            oma_apt::package::DepType::Enhances => OmaDepType::Enhances,
-        }
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct DebPackageVersion {
@@ -248,7 +121,13 @@ impl VersionSet for Requirement {
             None => true,
         };
 
-        info!("Compare: {} {:?} {} {}", v_package, cmp.unwrap(), v_test, res);
+        info!(
+            "Compare: {} {:?} {} {}",
+            v_package,
+            cmp.unwrap(),
+            v_test,
+            res
+        );
 
         res
     }
@@ -263,28 +142,27 @@ pub struct DebProvider {
 }
 
 impl DebProvider {
-    pub fn from_repodata(disable_suggest: bool) -> Self {
-        let cache = new_cache!().unwrap();
-        let packages = cache.packages(&PackageSort::default()).unwrap();
+    pub fn from_repodata(packages: &str, disable_suggest: bool) -> Self {
+        let packages = Packages::new(packages).unwrap();
 
         let pool = Pool::default();
         let mut solve_packages = HashMap::new();
 
-        for pkg in packages {
+        for pkg in packages.0 {
             let (requires, limits) = get_requirment(&pkg);
 
             let pack = DebPackageVersion {
-                name: pkg.name().to_string(),
-                version: PkgVersion::try_from(pkg.candidate().unwrap().version()).unwrap(),
+                name: pkg.name.to_string(),
+                version: PkgVersion::try_from(pkg.version.unwrap().as_str()).unwrap(),
                 requires,
                 limits,
             };
 
-            let name_id = pool.intern_package_name(pkg.name());
+            let name_id = pool.intern_package_name(&pkg.name);
             let solvable = pool.intern_solvable(name_id, pack.clone());
 
             let provides = solve_packages
-                .entry(pkg.name().to_string())
+                .entry(pkg.name.to_string())
                 .or_insert_with(Vec::new);
 
             provides.push(solvable);
@@ -312,7 +190,7 @@ impl DependencyProvider<Requirement> for DebProvider {
             let a = self.pool.resolve_solvable(*a).inner();
             let b = self.pool.resolve_solvable(*b).inner();
 
-            a.version.cmp(&b.version)
+            b.version.cmp(&a.version)
         });
     }
 
@@ -388,47 +266,39 @@ impl DependencyProvider<Requirement> for DebProvider {
     }
 }
 
-fn get_requirment(pkg: &Package) -> (Vec<Requirement>, Vec<Requirement>) {
+fn get_requirment(pkg: &DebPackage) -> (Vec<Requirement>, Vec<Requirement>) {
     let mut requires = vec![];
     let mut limit = vec![];
-    if let Some(cand) = pkg.candidate() {
-        let deps_map = cand.depends_map();
-        let deps = deps_map
-            .get(&DepType::Depends)
-            .map(|x| OmaDependency::map_deps(x).inner());
-
-        let deps_pre = deps_map
-            .get(&DepType::PreDepends)
-            .map(|x| OmaDependency::map_deps(x).inner());
+    if let Some(cand) = &pkg.version {
+        let deps = pkg.depends.clone();
+        let deps_pre = pkg.pre_depends.clone();
 
         let mut all_deps = vec![];
-
-        if let Some(deps) = deps {
-            all_deps.extend(deps);
-        }
-
-        if let Some(deps) = deps_pre {
-            all_deps.extend(deps);
-        }
+        all_deps.extend(deps);
+        all_deps.extend(deps_pre);
 
         for dep in all_deps {
-            for b in dep {
-                requires.push(Requirement {
-                    name: b.name,
-                    flags: match b.comp_symbol.as_deref() {
-                        Some(">=") => Some("GE".to_string()),
-                        Some(">") => Some("GT".to_string()),
-                        Some("<=") => Some("LE".to_string()),
-                        Some("<") => Some("LT".to_string()),
-                        Some("=") => Some("EQ".to_string()),
-                        Some(">>") => Some("GT".to_string()),
-                        Some("<<") => Some("LT".to_string()),
+            requires.push(Requirement {
+                name: dep.name,
+                flags: match dep.comp {
+                    Some(ref comp) => match comp.symbol.as_str() {
+                        ">=" => Some("GE".to_string()),
+                        ">" => Some("GT".to_string()),
+                        "<=" => Some("LE".to_string()),
+                        "<" => Some("LT".to_string()),
+                        "=" => Some("EQ".to_string()),
+                        ">>" => Some("GT".to_string()),
+                        "<<" => Some("LT".to_string()),
                         _ => None,
                     },
-                    version: b.ver.map(|x| PkgVersion::try_from(x.as_str()).unwrap()),
-                    preinstall: false,
-                })
-            }
+                    None => None,
+                },
+                version: match dep.comp {
+                    Some(comp) => Some(PkgVersion::try_from(comp.ver.as_str()).unwrap()),
+                    None => None,
+                },
+                preinstall: false,
+            })
         }
 
         // a (replace b <= 1.0)
@@ -446,43 +316,152 @@ fn get_requirment(pkg: &Package) -> (Vec<Requirement>, Vec<Requirement>) {
         //     }
         // }
 
-        let breaks = deps_map
-            .get(&DepType::Breaks)
-            .map(|x| OmaDependency::map_deps(x).inner());
-        let conflicts = deps_map
-            .get(&DepType::Conflicts)
-            .map(|x| OmaDependency::map_deps(x).inner());
-
         let mut all_rev_ship_deps = vec![];
-
-        if let Some(breaks) = breaks {
-            all_rev_ship_deps.extend(breaks);
-        }
-
-        if let Some(conflicts) = conflicts {
-            all_rev_ship_deps.extend(conflicts);
-        }
+        all_rev_ship_deps.extend(pkg.breaks.clone());
+        all_rev_ship_deps.extend(pkg.conflicts.clone());
 
         for dep in all_rev_ship_deps {
-            for b in dep {
-                limit.push(Requirement {
-                    name: b.name,
-                    flags: match b.comp_symbol.as_deref() {
-                        Some(">=") => Some("LT".to_string()),
-                        Some(">") => Some("LE".to_string()),
-                        Some("<=") => Some("GT".to_string()),
-                        Some("<") => Some("GE".to_string()),
-                        Some("=") => Some("NE".to_string()),
-                        Some(">>") => Some("LE".to_string()),
-                        Some("<<") => Some("GE".to_string()),
+            limit.push(Requirement {
+                name: dep.name,
+                flags: match dep.comp {
+                    Some(ref comp) => match comp.symbol.as_str() {
+                        ">=" => Some("LT".to_string()),
+                        ">" => Some("LE".to_string()),
+                        "<=" => Some("GT".to_string()),
+                        "<" => Some("GE".to_string()),
+                        "=" => Some("NE".to_string()),
+                        ">>" => Some("LE".to_string()),
+                        "<<" => Some("GE".to_string()),
                         _ => None,
                     },
-                    version: b.ver.map(|x| PkgVersion::try_from(x.as_str()).unwrap()),
-                    preinstall: true,
-                })
-            }
+                    _ => None,
+                },
+                version: match dep.comp {
+                    Some(c) => Some(PkgVersion::try_from(c.ver.as_str()).unwrap()),
+                    None => None,
+                },
+                preinstall: false,
+            })
         }
     }
 
     (requires, limit)
+}
+
+#[derive(Debug, Error)]
+pub enum ResolvoDebError {
+    #[error("{0}")]
+    SyntaxError(String),
+    #[error("Has no name")]
+    MissingName,
+}
+
+struct Packages(Vec<DebPackage>);
+
+#[derive(Clone)]
+struct DebPackage {
+    name: String,
+    version: Option<String>,
+    arch: Option<String>,
+    depends: Vec<Dep>,
+    breaks: Vec<Dep>,
+    conflicts: Vec<Dep>,
+    replaces: Vec<Dep>,
+    pre_depends: Vec<Dep>,
+}
+
+impl Packages {
+    fn new(packages: &str) -> Result<Self, ResolvoDebError> {
+        let packages = oma_debcontrol::parse_str(packages)
+            .map_err(|e| ResolvoDebError::SyntaxError(e.to_string()))?;
+
+        let mut res = vec![];
+
+        for pkg in packages {
+            let name = debcontrol_field(&pkg, "Package");
+            let version = debcontrol_field(&pkg, "Version");
+            let arch = debcontrol_field(&pkg, "Architecture");
+            let depends = debcontrol_field(&pkg, "Depends")
+                .map(|x| parse_deps(&x))
+                .unwrap_or_default();
+            let breaks = debcontrol_field(&pkg, "Breaks")
+                .map(|x| parse_deps(&x))
+                .unwrap_or_default();
+            let conflicts = debcontrol_field(&pkg, "Conflicts")
+                .map(|x| parse_deps(&x))
+                .unwrap_or_default();
+            let replaces = debcontrol_field(&pkg, "Replaces")
+                .map(|x| parse_deps(&x))
+                .unwrap_or_default();
+            let pre_depends = debcontrol_field(&pkg, "PreDepends")
+                .map(|x| parse_deps(&x))
+                .unwrap_or_default();
+
+            res.push(DebPackage {
+                name: name.ok_or_else(|| ResolvoDebError::MissingName)?,
+                version,
+                arch,
+                depends,
+                breaks,
+                conflicts,
+                replaces,
+                pre_depends,
+            });
+        }
+
+        Ok(Self(res))
+    }
+}
+
+fn debcontrol_field(value: &Paragraph, field: &str) -> Option<String> {
+    value
+        .fields
+        .iter()
+        .find(|x| x.name == field)
+        .map(|x| x.value.to_string())
+}
+
+#[derive(Clone)]
+struct Dep {
+    name: String,
+    comp: Option<Comp>,
+}
+
+#[derive(Clone)]
+struct Comp {
+    symbol: String,
+    ver: String,
+}
+
+fn parse_deps(s: &str) -> Vec<Dep> {
+    let mut res = vec![];
+    let v = s.trim().split(',');
+
+    for i in v {
+        let name = i.trim().split_once(" ");
+        if let Some((name, comp)) = name {
+            res.push(Dep {
+                name: name.to_string(),
+                comp: parse_comp(comp),
+            })
+        } else {
+            res.push(Dep {
+                name: i.trim().to_string(),
+                comp: None,
+            })
+        }
+    }
+
+    res
+}
+
+fn parse_comp(s: &str) -> Option<Comp> {
+    let s = s.trim();
+    let s = s.strip_prefix('(').and_then(|x| x.strip_suffix(')'))?;
+    let (symbol, ver) = s.split_once(' ')?;
+
+    Some(Comp {
+        symbol: symbol.to_string(),
+        ver: ver.to_string(),
+    })
 }

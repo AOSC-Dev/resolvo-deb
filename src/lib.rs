@@ -10,8 +10,8 @@ mod provider;
 pub struct DebSolver(pub Solver<Requirement, String, DebProvider>);
 
 impl DebSolver {
-    pub fn new() -> Self {
-        let provider = DebProvider::from_repodata(true);
+    pub fn new(packages_file: &str) -> Self {
+        let provider = DebProvider::from_repodata(packages_file, true);
         let solver = resolvo::Solver::new(provider);
 
         Self(solver)
@@ -22,7 +22,7 @@ impl DebSolver {
         for pkg in pkgs {
             let spec = Requirement {
                 name: pkg.to_string(),
-                flags: Some("GT".into()),
+                flags: Some("GE".into()),
                 version: Some(PkgVersion::try_from("0").unwrap()),
                 preinstall: false,
             };
