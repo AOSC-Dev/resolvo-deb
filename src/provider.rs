@@ -396,7 +396,7 @@ impl Packages {
                 .unwrap_or_default();
 
             res.push(DebPackage {
-                name: name.ok_or_else(|| ResolvoDebError::MissingName)?,
+                name: name.ok_or(ResolvoDebError::MissingName)?,
                 version,
                 _arch: arch,
                 depends,
@@ -436,7 +436,7 @@ fn parse_deps(s: &str) -> Vec<Dep> {
     let v = s.trim().split(',');
 
     for i in v {
-        let name = i.trim().split_once(" ");
+        let name = i.trim().split_once(' ');
         if let Some((name, comp)) = name {
             res.push(Dep {
                 name: name.to_string(),

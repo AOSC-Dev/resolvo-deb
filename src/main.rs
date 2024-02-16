@@ -36,7 +36,7 @@ fn main() {
             .unwrap()
             .text()
             .unwrap();
-        
+
         packages_file.push_str(&arch_packages);
     }
 

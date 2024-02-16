@@ -7,9 +7,9 @@ use nom::{
 };
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize, Serializer};
-use tracing::warn;
 use std::cmp::Ordering;
 use std::fmt;
+use tracing::warn;
 
 static DIGIT_TABLE: Lazy<Vec<char>> = Lazy::new(|| "1234567890".chars().collect());
 static NON_DIGIT_TABLE: Lazy<Vec<char>> = Lazy::new(|| {
