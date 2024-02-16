@@ -269,80 +269,78 @@ impl DependencyProvider<Requirement> for DebProvider {
 fn get_requirment(pkg: &DebPackage) -> (Vec<Requirement>, Vec<Requirement>) {
     let mut requires = vec![];
     let mut limit = vec![];
-    if let Some(cand) = &pkg.version {
-        let deps = pkg.depends.clone();
-        let deps_pre = pkg.pre_depends.clone();
+    let deps = pkg.depends.clone();
+    let deps_pre = pkg.pre_depends.clone();
 
-        let mut all_deps = vec![];
-        all_deps.extend(deps);
-        all_deps.extend(deps_pre);
+    let mut all_deps = vec![];
+    all_deps.extend(deps);
+    all_deps.extend(deps_pre);
 
-        for dep in all_deps {
-            requires.push(Requirement {
-                name: dep.name,
-                flags: match dep.comp {
-                    Some(ref comp) => match comp.symbol.as_str() {
-                        ">=" => Some("GE".to_string()),
-                        ">" => Some("GT".to_string()),
-                        "<=" => Some("LE".to_string()),
-                        "<" => Some("LT".to_string()),
-                        "=" => Some("EQ".to_string()),
-                        ">>" => Some("GT".to_string()),
-                        "<<" => Some("LT".to_string()),
-                        _ => None,
-                    },
-                    None => None,
-                },
-                version: match dep.comp {
-                    Some(comp) => Some(PkgVersion::try_from(comp.ver.as_str()).unwrap()),
-                    None => None,
-                },
-                preinstall: false,
-            })
-        }
-
-        // a (replace b <= 1.0)
-        // 当 b <= 1.0 时，a 就是 b
-        // 因此，c dep b <= 1.0 就是 c dep a
-        // let replaces = deps_map
-        //     .get(&DepType::Replaces)
-        //     .map(|x| OmaDependency::map_deps(x).inner());
-
-        // if let Some(replaces) = replaces {
-        //     for dep in replaces {
-        //         for b in dep {
-
-        //         }
-        //     }
-        // }
-
-        let mut all_rev_ship_deps = vec![];
-        all_rev_ship_deps.extend(pkg.breaks.clone());
-        all_rev_ship_deps.extend(pkg.conflicts.clone());
-
-        for dep in all_rev_ship_deps {
-            limit.push(Requirement {
-                name: dep.name,
-                flags: match dep.comp {
-                    Some(ref comp) => match comp.symbol.as_str() {
-                        ">=" => Some("LT".to_string()),
-                        ">" => Some("LE".to_string()),
-                        "<=" => Some("GT".to_string()),
-                        "<" => Some("GE".to_string()),
-                        "=" => Some("NE".to_string()),
-                        ">>" => Some("LE".to_string()),
-                        "<<" => Some("GE".to_string()),
-                        _ => None,
-                    },
+    for dep in all_deps {
+        requires.push(Requirement {
+            name: dep.name,
+            flags: match dep.comp {
+                Some(ref comp) => match comp.symbol.as_str() {
+                    ">=" => Some("GE".to_string()),
+                    ">" => Some("GT".to_string()),
+                    "<=" => Some("LE".to_string()),
+                    "<" => Some("LT".to_string()),
+                    "=" => Some("EQ".to_string()),
+                    ">>" => Some("GT".to_string()),
+                    "<<" => Some("LT".to_string()),
                     _ => None,
                 },
-                version: match dep.comp {
-                    Some(c) => Some(PkgVersion::try_from(c.ver.as_str()).unwrap()),
-                    None => None,
+                None => None,
+            },
+            version: match dep.comp {
+                Some(comp) => Some(PkgVersion::try_from(comp.ver.as_str()).unwrap()),
+                None => None,
+            },
+            preinstall: false,
+        })
+    }
+
+    // a (replace b <= 1.0)
+    // 当 b <= 1.0 时，a 就是 b
+    // 因此，c dep b <= 1.0 就是 c dep a
+    // let replaces = deps_map
+    //     .get(&DepType::Replaces)
+    //     .map(|x| OmaDependency::map_deps(x).inner());
+
+    // if let Some(replaces) = replaces {
+    //     for dep in replaces {
+    //         for b in dep {
+
+    //         }
+    //     }
+    // }
+
+    let mut all_rev_ship_deps = vec![];
+    all_rev_ship_deps.extend(pkg.breaks.clone());
+    all_rev_ship_deps.extend(pkg.conflicts.clone());
+
+    for dep in all_rev_ship_deps {
+        limit.push(Requirement {
+            name: dep.name,
+            flags: match dep.comp {
+                Some(ref comp) => match comp.symbol.as_str() {
+                    ">=" => Some("LT".to_string()),
+                    ">" => Some("LE".to_string()),
+                    "<=" => Some("GT".to_string()),
+                    "<" => Some("GE".to_string()),
+                    "=" => Some("NE".to_string()),
+                    ">>" => Some("LE".to_string()),
+                    "<<" => Some("GE".to_string()),
+                    _ => None,
                 },
-                preinstall: false,
-            })
-        }
+                _ => None,
+            },
+            version: match dep.comp {
+                Some(c) => Some(PkgVersion::try_from(c.ver.as_str()).unwrap()),
+                None => None,
+            },
+            preinstall: false,
+        })
     }
 
     (requires, limit)
@@ -362,11 +360,11 @@ struct Packages(Vec<DebPackage>);
 struct DebPackage {
     name: String,
     version: Option<String>,
-    arch: Option<String>,
+    _arch: Option<String>,
     depends: Vec<Dep>,
     breaks: Vec<Dep>,
     conflicts: Vec<Dep>,
-    replaces: Vec<Dep>,
+    _replaces: Vec<Dep>,
     pre_depends: Vec<Dep>,
 }
 
@@ -400,11 +398,11 @@ impl Packages {
             res.push(DebPackage {
                 name: name.ok_or_else(|| ResolvoDebError::MissingName)?,
                 version,
-                arch,
+                _arch: arch,
                 depends,
                 breaks,
                 conflicts,
-                replaces,
+                _replaces: replaces,
                 pre_depends,
             });
         }

@@ -14,7 +14,7 @@ fn main() {
     let args = Args::parse();
     let pkgs = args.packages;
 
-    // tracing_subscriber::fmt::init();
+    tracing_subscriber::fmt::init();
 
     let client = reqwest::blocking::Client::builder()
         .user_agent("resolvo-deb")
