@@ -153,7 +153,7 @@ fn main() {
         let spec = Requirement {
             name: pkg.to_string(),
             flags: Some("GT".into()),
-            version: Some(PkgVersion::try_from("0.0.0").unwrap()),
+            version: Some(PkgVersion::try_from("0").unwrap()),
             preinstall: false,
         };
         
