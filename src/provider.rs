@@ -6,6 +6,7 @@ use oma_apt::{
 use resolvo::{
     Candidates, Dependencies, DependencyProvider, NameId, Pool, SolvableId, SolverCache, VersionSet,
 };
+use tracing::info;
 use version_compare::Cmp;
 
 use crate::pkgversion::PkgVersion;
@@ -237,7 +238,7 @@ impl VersionSet for Requirement {
 
         let v_test = self.version.as_ref().unwrap();
 
-        println!("Comparing: {} {:?} {}", v_package, cmp.unwrap(), v_test);
+        info!("Comparing: {} {:?} {}", v_package, cmp.unwrap(), v_test);
 
         let res = match cmp {
             Some(Cmp::Eq) => v_package == v_test,

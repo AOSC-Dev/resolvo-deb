@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use clap::Parser;
 use resolvo::DefaultSolvableDisplay;
-use resolvo_deb::{create_solver, resolve};
+use resolvo_deb::DebSolver;
 
 #[derive(Parser, Debug)]
 #[clap(about, version, author)]
@@ -16,18 +16,21 @@ fn main() {
 
     tracing_subscriber::fmt::init();
 
-    let mut solver = create_solver();
-    let solvables = match resolve(&mut solver, pkgs) {
+    let mut solver = DebSolver::new();
+    let solvables = match solver.solve(pkgs) {
         Ok(solvables) => solvables,
         Err(problem) => {
-            println!("Problem: {}", problem.display_user_friendly(&solver, &DefaultSolvableDisplay));
+            println!(
+                "Problem: {}",
+                problem.display_user_friendly(&solver.0, &DefaultSolvableDisplay)
+            );
             return;
         }
     };
 
     let resolved: BTreeSet<String> = solvables
         .iter()
-        .map(|s| s.display(solver.pool()).to_string())
+        .map(|s| s.display(solver.0.pool()).to_string())
         .collect();
 
     println!("Resolved:\n");
