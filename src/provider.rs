@@ -152,7 +152,7 @@ impl DebProvider {
                 name: pkg.name().to_string(),
                 version: PkgVersion::try_from(pkg.candidate().unwrap().version()).unwrap(),
                 requires,
-                limits
+                limits,
             };
 
             let name_id = pool.intern_package_name(pkg.name());
@@ -306,21 +306,29 @@ fn get_requirment(pkg: &Package) -> (Vec<Requirement>, Vec<Requirement>) {
             }
         }
 
+        // a (replace b <= 1.0)
+        // 当 b <= 1.0 时，a 就是 b
+        // 因此，c dep b <= 1.0 就是 c dep a
+        // let replaces = deps_map
+        //     .get(&DepType::Replaces)
+        //     .map(|x| OmaDependency::map_deps(x).inner());
+
+        // if let Some(replaces) = replaces {
+        //     for dep in replaces {
+        //         for b in dep {
+
+        //         }
+        //     }
+        // }
+
         let breaks = deps_map
             .get(&DepType::Breaks)
-            .map(|x| OmaDependency::map_deps(x).inner());
-        let replaces = deps_map
-            .get(&DepType::Replaces)
             .map(|x| OmaDependency::map_deps(x).inner());
         let conflicts = deps_map
             .get(&DepType::Conflicts)
             .map(|x| OmaDependency::map_deps(x).inner());
 
         let mut all_rev_ship_deps = vec![];
-
-        if let Some(replaces) = replaces {
-            all_rev_ship_deps.extend(replaces);
-        }
 
         if let Some(breaks) = breaks {
             all_rev_ship_deps.extend(breaks);
