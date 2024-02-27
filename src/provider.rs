@@ -1,3 +1,9 @@
+#[cfg(feature = "local")]
+use oma_apt::{
+    cache::PackageSort,
+    new_cache,
+    package::{BaseDep, DepType, Dependency},
+};
 use oma_debcontrol::Paragraph;
 use resolvo::{
     Candidates, Dependencies, DependencyProvider, NameId, Pool, SolvableId, SolverCache, VersionSet,
@@ -133,16 +139,142 @@ impl VersionSet for Requirement {
     }
 }
 
+#[cfg(feature = "local")]
+#[derive(Debug)]
+pub struct OmaDependency {
+    pub name: String,
+    pub comp_symbol: Option<String>,
+    pub ver: Option<String>,
+    pub target_ver: Option<String>,
+    pub comp_ver: Option<String>,
+}
+#[cfg(feature = "local")]
+impl From<&BaseDep<'_>> for OmaDependency {
+    fn from(dep: &BaseDep) -> Self {
+        Self {
+            name: dep.name().to_owned(),
+            comp_symbol: dep.comp().map(|x| x.to_string()),
+            ver: dep.version().map(|x| x.to_string()),
+            target_ver: dep.target_ver().ok().map(|x| x.to_string()),
+            comp_ver: dep
+                .comp()
+                .and_then(|x| Some(format!("{x} {}", dep.version()?))),
+        }
+    }
+}
+#[cfg(feature = "local")]
+#[derive(Debug)]
+pub struct OmaDependencyGroup(Vec<Vec<OmaDependency>>);
+
+#[cfg(feature = "local")]
+impl OmaDependencyGroup {
+    pub fn inner(self) -> Vec<Vec<OmaDependency>> {
+        self.0
+    }
+}
+#[cfg(feature = "local")]
+impl Display for OmaDependencyGroup {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for (i, d) in self.0.iter().enumerate() {
+            if d.len() == 1 {
+                // 如果数组长度为一，则肯定第一个位置有值
+                // 因此直接 unwrap
+                let dep = d.first().unwrap();
+                f.write_str(&dep.name)?;
+                if let Some(comp) = &dep.comp_ver {
+                    f.write_str(&format!(" ({comp})"))?;
+                }
+                if i != self.0.len() - 1 {
+                    f.write_str(", ")?;
+                }
+            } else {
+                let total = d.len() - 1;
+                for (num, base_dep) in d.iter().enumerate() {
+                    f.write_str(&base_dep.name)?;
+                    if let Some(comp) = &base_dep.comp_ver {
+                        f.write_str(&format!(" ({comp})"))?;
+                    }
+                    if i != self.0.len() - 1 {
+                        if num != total {
+                            f.write_str(" | ")?;
+                        } else {
+                            f.write_str(", ")?;
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+#[cfg(feature = "local")]
+impl OmaDependency {
+    pub fn map_deps(deps: &[Dependency]) -> OmaDependencyGroup {
+        let mut res = vec![];
+
+        for dep in deps {
+            if dep.is_or() {
+                let mut v = vec![];
+                for base_dep in &dep.base_deps {
+                    v.push(Self::from(base_dep));
+                }
+                res.push(v);
+            } else {
+                let lone_dep = dep.first();
+                res.push(vec![Self::from(lone_dep)]);
+            }
+        }
+
+        OmaDependencyGroup(res)
+    }
+}
+#[cfg(feature = "local")]
+#[derive(Debug, Eq, PartialEq, Hash)]
+pub enum OmaDepType {
+    Depends,
+    PreDepends,
+    Suggests,
+    Recommends,
+    Conflicts,
+    Replaces,
+    Obsoletes,
+    Breaks,
+    Enhances,
+}
+#[cfg(feature = "local")]
+impl Display for OmaDepType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+#[cfg(feature = "local")]
+impl From<&DepType> for OmaDepType {
+    fn from(v: &oma_apt::package::DepType) -> Self {
+        match v {
+            oma_apt::package::DepType::Depends => OmaDepType::Depends,
+            oma_apt::package::DepType::PreDepends => OmaDepType::PreDepends,
+            oma_apt::package::DepType::Suggests => OmaDepType::Suggests,
+            oma_apt::package::DepType::Recommends => OmaDepType::Recommends,
+            oma_apt::package::DepType::Conflicts => OmaDepType::Conflicts,
+            oma_apt::package::DepType::Replaces => OmaDepType::Replaces,
+            oma_apt::package::DepType::Obsoletes => OmaDepType::Obsoletes,
+            oma_apt::package::DepType::Breaks => OmaDepType::Breaks,
+            oma_apt::package::DepType::Enhances => OmaDepType::Enhances,
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct DebProvider {
     pub pool: Pool<Requirement>,
     pub solve_packages: HashMap<String, Vec<SolvableId>>,
-    // todo: this should disable individual rules / requirements
-    pub disable_suggest: bool,
 }
 
 impl DebProvider {
-    pub fn from_repodata(packages: &str, disable_suggest: bool) -> Self {
+    pub fn from_repodata(packages: &str) -> Self {
         let packages = Packages::new(packages).unwrap();
 
         let pool = Pool::default();
@@ -171,9 +303,143 @@ impl DebProvider {
         Self {
             pool,
             solve_packages,
-            disable_suggest,
         }
     }
+
+    #[cfg(feature = "local")]
+    pub fn from_local_cache() -> Result<Self, ResolvoDebError> {
+        let cache = new_cache!()?;
+        let packages = cache.packages(&PackageSort::default().include_virtual())?;
+
+        let pool = Pool::default();
+        let mut solve_packages = HashMap::new();
+
+        for pkg in packages {
+            let versions = pkg.versions().collect::<Vec<_>>();
+            let name = pkg.name();
+            let pkg = if versions.is_empty() {
+                if let Some(pkg) = pkg.provides().next().map(|x| x.target_pkg()) {
+                    pkg
+                } else {
+                    pkg.unique()
+                }
+            } else {
+                pkg.unique()
+            };
+
+            let pkg = oma_apt::package::Package::new(&cache, pkg);
+            let versions = pkg.versions();
+
+            for ver in versions {
+                let deps_map = ver.depends_map();
+                let mut all_deps = vec![];
+                let deps = deps_map
+                    .get(&DepType::Depends)
+                    .map(|x| OmaDependency::map_deps(&x));
+                let pre_deps = deps_map
+                    .get(&DepType::PreDepends)
+                    .map(|x| OmaDependency::map_deps(&x));
+
+                if let Some(d) = deps {
+                    all_deps.extend(d.inner());
+                }
+
+                if let Some(d) = pre_deps {
+                    all_deps.extend(d.inner());
+                }
+
+                let requires = get_requires_from_local(all_deps);
+
+                let mut all_breaks = vec![];
+
+                let breaks = deps_map
+                    .get(&DepType::Breaks)
+                    .map(|x| OmaDependency::map_deps(&x));
+                let conflicts = deps_map
+                    .get(&DepType::Conflicts)
+                    .map(|x| OmaDependency::map_deps(&x));
+
+                if let Some(d) = breaks {
+                    all_breaks.extend(d.inner());
+                }
+
+                if let Some(d) = conflicts {
+                    all_breaks.extend(d.inner());
+                }
+
+                let limits = get_limits(all_breaks);
+
+                let pack = DebPackageVersion {
+                    name: name.to_string(),
+                    version: PkgVersion::try_from(ver.version()).unwrap(),
+                    requires,
+                    limits,
+                };
+
+                let name_id = pool.intern_package_name(name);
+                let solvable = pool.intern_solvable(name_id, pack.clone());
+
+                let provides = solve_packages
+                    .entry(name.to_string())
+                    .or_insert_with(Vec::new);
+
+                provides.push(solvable);
+            }
+        }
+
+        // let virtual_packages = cache.packages(&PackageSort::default().only_virtual())?;
+
+        // for pkg in virtual_packages {
+
+        // }
+
+        Ok(Self {
+            pool,
+            solve_packages,
+        })
+    }
+}
+
+#[cfg(feature = "local")]
+fn get_requires_from_local(all_deps: Vec<Vec<OmaDependency>>) -> Vec<Requirement> {
+    let mut requires = vec![];
+
+    for deps in all_deps {
+        for base_dep in deps {
+            requires.push(Requirement {
+                name: base_dep.name.to_string(),
+                flags: base_dep
+                    .comp_symbol
+                    .and_then(|x| symbol_to_flag(&x).map(|x| x.to_string())),
+                version: base_dep
+                    .ver
+                    .map(|x| PkgVersion::try_from(x.as_str()).unwrap()),
+                preinstall: false,
+            })
+        }
+    }
+    requires
+}
+
+#[cfg(feature = "local")]
+fn get_limits(all_breaks: Vec<Vec<OmaDependency>>) -> Vec<Requirement> {
+    let mut limits = vec![];
+
+    for deps in all_breaks {
+        for base_dep in deps {
+            limits.push(Requirement {
+                name: base_dep.name.to_string(),
+                flags: base_dep
+                    .comp_symbol
+                    .and_then(|x| break_symbol_to_flag(&x).map(|x| x.to_string())),
+                version: base_dep
+                    .ver
+                    .map(|x| PkgVersion::try_from(x.as_str()).unwrap()),
+                preinstall: false,
+            })
+        }
+    }
+    limits
 }
 
 impl DependencyProvider<Requirement> for DebProvider {
@@ -346,12 +612,41 @@ fn get_requirment(pkg: &DebPackage) -> (Vec<Requirement>, Vec<Requirement>) {
     (requires, limit)
 }
 
+fn symbol_to_flag(symbol: &str) -> Option<&str> {
+    match symbol {
+        ">=" => Some("GE"),
+        ">" => Some("GT"),
+        "<=" => Some("LE"),
+        "<" => Some("LT"),
+        "=" => Some("EQ"),
+        ">>" => Some("GT"),
+        "<<" => Some("LT"),
+        _ => None,
+    }
+}
+
+fn break_symbol_to_flag(symbol: &str) -> Option<&str> {
+    match symbol {
+        ">=" => Some("LT"),
+        ">" => Some("LE"),
+        "<=" => Some("GT"),
+        "<" => Some("GE"),
+        "=" => Some("NE"),
+        ">>" => Some("LE"),
+        "<<" => Some("GE"),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum ResolvoDebError {
     #[error("{0}")]
     SyntaxError(String),
     #[error("Has no name")]
     MissingName,
+    #[cfg(feature = "local")]
+    #[error(transparent)]
+    RustApt(#[from] oma_apt::util::Exception),
 }
 
 struct Packages(Vec<DebPackage>);

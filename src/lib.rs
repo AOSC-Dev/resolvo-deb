@@ -1,4 +1,6 @@
 use provider::DebProvider;
+#[cfg(feature = "local")]
+use provider::ResolvoDebError;
 use resolvo::{problem::Problem, SolvableId, Solver};
 use tracing::info;
 
@@ -11,7 +13,7 @@ pub struct DebSolver(pub Solver<Requirement, String, DebProvider>);
 
 impl DebSolver {
     pub fn new(packages_file: &str) -> Self {
-        let provider = DebProvider::from_repodata(packages_file, true);
+        let provider = DebProvider::from_repodata(packages_file);
         let solver = resolvo::Solver::new(provider);
 
         Self(solver)
@@ -35,5 +37,13 @@ impl DebSolver {
         }
 
         self.0.solve(specs)
+    }
+
+    #[cfg(feature = "local")]
+    pub fn new_local() -> Result<Self, ResolvoDebError> {
+        let provider = DebProvider::from_local_cache()?;
+        let solver = resolvo::Solver::new(provider);
+
+        Ok(Self(solver))
     }
 }
