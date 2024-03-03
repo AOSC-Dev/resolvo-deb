@@ -268,12 +268,12 @@ impl From<&DepType> for OmaDepType {
 }
 
 #[derive(Default)]
-pub struct DebProvider {
+pub struct DebPkgPool {
     pub pool: Pool<Requirement>,
     pub solve_packages: HashMap<String, Vec<SolvableId>>,
 }
 
-impl DebProvider {
+impl DebPkgPool {
     pub fn from_repodata(packages: &str) -> Self {
         let packages = Packages::new(packages).unwrap();
 
@@ -442,7 +442,7 @@ fn get_limits(all_breaks: Vec<Vec<OmaDependency>>) -> Vec<Requirement> {
     limits
 }
 
-impl DependencyProvider<Requirement> for DebProvider {
+impl DependencyProvider<Requirement> for DebPkgPool {
     fn pool(&self) -> &Pool<Requirement> {
         &self.pool
     }
@@ -543,27 +543,18 @@ fn get_requirment(pkg: &DebPackage) -> (Vec<Requirement>, Vec<Requirement>) {
     all_deps.extend(deps_pre);
 
     for dep in all_deps {
+        let comp = dep.comp;
+        let symbol = comp.as_ref().map(|x| x.symbol.to_string());
+        let ver = comp.map(|x| x.ver.to_string());
         requires.push(Requirement {
             name: dep.name,
-            flags: match dep.comp {
-                Some(ref comp) => match comp.symbol.as_str() {
-                    ">=" => Some("GE".to_string()),
-                    ">" => Some("GT".to_string()),
-                    "<=" => Some("LE".to_string()),
-                    "<" => Some("LT".to_string()),
-                    "=" => Some("EQ".to_string()),
-                    ">>" => Some("GT".to_string()),
-                    "<<" => Some("LT".to_string()),
-                    _ => None,
-                },
-                None => None,
-            },
-            version: match dep.comp {
-                Some(comp) => Some(PkgVersion::try_from(comp.ver.as_str()).unwrap()),
+            flags: symbol.and_then(|x| symbol_to_flag(&x).map(|x| x.to_string())),
+            version: match ver {
+                Some(c) => Some(PkgVersion::try_from(c.as_str()).unwrap()),
                 None => None,
             },
             preinstall: false,
-        })
+        });
     }
 
     // a (replace b <= 1.0)
@@ -586,23 +577,14 @@ fn get_requirment(pkg: &DebPackage) -> (Vec<Requirement>, Vec<Requirement>) {
     all_rev_ship_deps.extend(pkg.conflicts.clone());
 
     for dep in all_rev_ship_deps {
+        let comp = dep.comp;
+        let symbol = comp.as_ref().map(|x| x.symbol.to_string());
+        let ver = comp.map(|x| x.ver.to_string());
         limit.push(Requirement {
             name: dep.name,
-            flags: match dep.comp {
-                Some(ref comp) => match comp.symbol.as_str() {
-                    ">=" => Some("LT".to_string()),
-                    ">" => Some("LE".to_string()),
-                    "<=" => Some("GT".to_string()),
-                    "<" => Some("GE".to_string()),
-                    "=" => Some("NE".to_string()),
-                    ">>" => Some("LE".to_string()),
-                    "<<" => Some("GE".to_string()),
-                    _ => None,
-                },
-                _ => None,
-            },
-            version: match dep.comp {
-                Some(c) => Some(PkgVersion::try_from(c.ver.as_str()).unwrap()),
+            flags: symbol.and_then(|x| break_symbol_to_flag(&x).map(|x| x.to_string())),
+            version: match ver {
+                Some(c) => Some(PkgVersion::try_from(c.as_str()).unwrap()),
                 None => None,
             },
             preinstall: false,

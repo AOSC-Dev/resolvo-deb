@@ -16,56 +16,89 @@ fn main() {
 
     tracing_subscriber::fmt::init();
 
-    let client = reqwest::blocking::Client::builder()
-        .user_agent("resolvo-deb")
-        .build()
-        .unwrap();
-
-    let arch = get_arch_name().unwrap();
-
-    let mut packages_file = String::new();
-
-    for i in [arch, "all"] {
-        let arch_packages = client
-            .get(format!(
-                "https://repo.aosc.io/debs/dists/stable/main/binary-{i}/Packages"
-            ))
-            .send()
-            .unwrap()
-            .error_for_status()
-            .unwrap()
-            .text()
+    #[cfg(not(feature = "local"))]
+    {
+        let client = reqwest::blocking::Client::builder()
+            .user_agent("resolvo-deb")
+            .build()
             .unwrap();
 
-        packages_file.push_str(&arch_packages);
+        let arch = get_arch_name().unwrap();
+
+        let mut packages_file = String::new();
+
+        for i in [arch, "all"] {
+            let arch_packages = client
+                .get(format!(
+                    "https://repo.aosc.io/debs/dists/stable/main/binary-{i}/Packages"
+                ))
+                .send()
+                .unwrap()
+                .error_for_status()
+                .unwrap()
+                .text()
+                .unwrap();
+
+            packages_file.push_str(&arch_packages);
+        }
+
+        let mut solver = DebSolver::new(&packages_file);
+
+        let solvables = match solver.solve(pkgs) {
+            Ok(solvables) => solvables,
+            Err(problem) => {
+                println!(
+                    "Problem: {}",
+                    problem.display_user_friendly(&solver.0, &DefaultSolvableDisplay)
+                );
+                return;
+            }
+        };
+
+        let resolved: BTreeSet<String> = solvables
+            .iter()
+            .map(|s| s.display(solver.0.pool()).to_string())
+            .collect();
+
+        println!("Resolved:\n");
+
+        for r in resolved {
+            println!("- {}", r);
+        }
     }
 
-    let mut solver = DebSolver::new(&packages_file);
-    let solvables = match solver.solve(pkgs) {
-        Ok(solvables) => solvables,
-        Err(problem) => {
-            println!(
-                "Problem: {}",
-                problem.display_user_friendly(&solver.0, &DefaultSolvableDisplay)
-            );
-            return;
+    #[cfg(feature = "local")]
+    {
+
+        let mut solver = DebSolver::new_local().unwrap();
+
+        let solvables = match solver.solve(pkgs) {
+            Ok(solvables) => solvables,
+            Err(problem) => {
+                println!(
+                    "Problem: {}",
+                    problem.display_user_friendly(&solver.0, &DefaultSolvableDisplay)
+                );
+                return;
+            }
+        };
+
+        let resolved: BTreeSet<String> = solvables
+            .iter()
+            .map(|s| s.display(solver.0.pool()).to_string())
+            .collect();
+
+        println!("Resolved:\n");
+
+        for r in resolved {
+            println!("- {}", r);
         }
-    };
-
-    let resolved: BTreeSet<String> = solvables
-        .iter()
-        .map(|s| s.display(solver.0.pool()).to_string())
-        .collect();
-
-    println!("Resolved:\n");
-
-    for r in resolved {
-        println!("- {}", r);
     }
 }
 
 /// AOSC OS specific architecture mapping for ppc64
 #[cfg(target_arch = "powerpc64")]
+#[cfg(not(feature = "local"))]
 #[inline]
 pub(crate) fn get_arch_name() -> Option<&'static str> {
     let mut endian: libc::c_int = -1;
@@ -85,6 +118,7 @@ pub(crate) fn get_arch_name() -> Option<&'static str> {
 
 /// AOSC OS specific architecture mapping table
 #[cfg(not(target_arch = "powerpc64"))]
+#[cfg(not(feature = "local"))]
 #[inline]
 pub(crate) fn get_arch_name() -> Option<&'static str> {
     use std::env::consts::ARCH;

@@ -1,19 +1,19 @@
-use provider::DebProvider;
+use solver::DebPkgPool;
 #[cfg(feature = "local")]
-use provider::ResolvoDebError;
+use solver::ResolvoDebError;
 use resolvo::{problem::Problem, SolvableId, Solver};
 use tracing::info;
 
-use crate::{pkgversion::PkgVersion, provider::Requirement};
+use crate::{pkgversion::PkgVersion, solver::Requirement};
 
 mod pkgversion;
-mod provider;
+mod solver;
 
-pub struct DebSolver(pub Solver<Requirement, String, DebProvider>);
+pub struct DebSolver(pub Solver<Requirement, String, DebPkgPool>);
 
 impl DebSolver {
     pub fn new(packages_file: &str) -> Self {
-        let provider = DebProvider::from_repodata(packages_file);
+        let provider = DebPkgPool::from_repodata(packages_file);
         let solver = resolvo::Solver::new(provider);
 
         Self(solver)
@@ -41,8 +41,8 @@ impl DebSolver {
 
     #[cfg(feature = "local")]
     pub fn new_local() -> Result<Self, ResolvoDebError> {
-        let provider = DebProvider::from_local_cache()?;
-        let solver = resolvo::Solver::new(provider);
+        let solver = DebPkgPool::from_local_cache()?;
+        let solver = resolvo::Solver::new(solver);
 
         Ok(Self(solver))
     }
