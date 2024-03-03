@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 
 use clap::Parser;
+use oma_apt::new_cache;
 use resolvo::DefaultSolvableDisplay;
 use resolvo_deb::DebSolver;
 
@@ -69,10 +70,29 @@ fn main() {
 
     #[cfg(feature = "local")]
     {
-
         let mut solver = DebSolver::new_local().unwrap();
+        let cache = new_cache!().unwrap();
 
-        let solvables = match solver.solve(pkgs) {
+        let mut pkgs_res = vec![];
+        for i in pkgs {
+            let pkg = cache.get(&i).unwrap();
+            let pkg = if pkg.versions().collect::<Vec<_>>().is_empty() {
+                if let Some(pkg) = pkg.provides().next().map(|x| x.target_pkg()) {
+                    pkg
+                } else {
+                    pkg.unique()
+                }
+            } else {
+                pkg.unique()
+            };
+
+            let pkg = oma_apt::package::Package::new(&cache, pkg);
+            let cand = pkg.candidate().unwrap().unique();
+            pkgs_res.push(cand);
+        }
+
+        let solvables = solver.get_requirement(pkgs_res).unwrap();
+        let solvables = match solver.solve(solvables){
             Ok(solvables) => solvables,
             Err(problem) => {
                 println!(
@@ -82,6 +102,7 @@ fn main() {
                 return;
             }
         };
+
 
         let resolved: BTreeSet<String> = solvables
             .iter()
