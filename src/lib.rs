@@ -11,6 +11,8 @@ use crate::{pkgversion::PkgVersion, solver::Requirement};
 mod pkgversion;
 mod solver;
 
+pub use resolvo;
+
 pub struct DebSolver(pub Solver<Requirement, String, DebPkgPool>);
 
 impl DebSolver {
